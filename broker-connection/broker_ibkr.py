@@ -9,6 +9,10 @@ from typing import Literal
 from ib_insync import IB, Stock, Crypto, Order, MarketOrder, \
     LimitOrder, StopOrder, BracketOrder, Contract, util
 
+from shared.dry_run import dry_run_guard, sprawdz_tryb
+
+# Na starcie:
+sprawdz_tryb()
 # ──────────────────────────────────────────────
 # 1. Konfiguracja
 # ──────────────────────────────────────────────
@@ -186,7 +190,7 @@ class KlientIBKR:
         raise ValueError(f"Nieznany typ zlecenia: {zlecenie.typ_zlecenia}")
 
     # --- Główna funkcja wykonania ---
-
+    @dry_run_guard
     async def wykonaj_zlecenie(
         self,
         zlecenie: ZlecenieBrokera,

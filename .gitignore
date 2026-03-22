@@ -1,1 +1,35 @@
+cat > .gitignore << 'EOF'
+# Sekrety – NIGDY nie commituj
 .env
+.env.override
+*.env
+
+# Bazy danych
+*.db
+*.sqlite
+*.db-journal
+
+# Logi i dane agentów
+*.jsonl
+data/
+logs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Docker volumes (lokalne)
+tws_settings/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# macOS
+.DS_Store
+EOF
