@@ -1,0 +1,5 @@
+yfinance
+pandas-ta
+ollama
+psycopg2-binary
+python-dotenv

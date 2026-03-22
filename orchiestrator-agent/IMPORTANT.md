@@ -1,0 +1,1 @@
+Jedyna rzecz gorsza od złego sygnału inwestycyjnego to dobry sygnał bez zarządzania ryzykiem. Możesz mieć 70% skuteczności i nadal zbankrutować, jeśli te 30% strat jest 5x większe od zysków. Agent ryzyka to właśnie zabezpieczenie przed tym scenariuszem.

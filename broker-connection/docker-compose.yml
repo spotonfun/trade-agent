@@ -1,0 +1,19 @@
+services:
+  tws-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    environment:
+      TWS_USERID: ${IBKR_USERNAME}
+      TWS_PASSWORD: ${IBKR_PASSWORD}
+      TRADING_MODE: paper # ← ZAWSZE zacznij od paper!
+      TWS_ACCEPT_INCOMING: accept
+      READ_ONLY_API: "no"
+    ports:
+      - "4002:4002" # paper trading
+      - "4001:4001" # live (nie otwieraj dopóki nie testujesz na live)
+      - "5900:5900" # VNC – podgląd TWS GUI
+    restart: unless-stopped
+    volumes:
+      - tws_settings:/home/ibgateway/Jts
+
+volumes:
+  tws_settings:

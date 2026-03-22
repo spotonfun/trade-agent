@@ -1,0 +1,277 @@
+# docker-compose.yml – katalog główny TRADE-AGENT/
+# Uruchomienie: docker compose up -d
+
+name: trade-agent
+
+# ── Wspólna konfiguracja dla agentów Python ─────
+x-agent-base: &agent-base
+  build:
+    context: .
+  env_file: .env
+  networks:
+    - trade-net
+  restart: unless-stopped
+  depends_on:
+    ollama:
+      condition: service_healthy
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+# ════════════════════════════════════════════════
+services:
+  # ── 1. Ollama – lokalny LLM ──────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: trade-ollama
+    networks:
+      - trade-net
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    # Odkomentuj jeśli masz GPU NVIDIA:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  # ── 2. PostgreSQL – baza danych ──────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: trade-postgres
+    networks:
+      - trade-net
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5432:5432" # tylko dla debugowania – usuń na produkcji
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── 3. Redis – cache i kolejka zleceń ─────────
+  redis:
+    image: redis:7-alpine
+    container_name: trade-redis
+    networks:
+      - trade-net
+    volumes:
+      - redis_data:/data
+    command: redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes
+    ports:
+      - "6379:6379" # tylko dla debugowania
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── 4. TWS Gateway – most do IBKR ────────────
+  tws-gateway:
+    profiles: [live, paper]
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    container_name: trade-tws
+    networks:
+      - trade-net
+    environment:
+      TWS_USERID: ${IBKR_USERNAME}
+      TWS_PASSWORD: ${IBKR_PASSWORD}
+      TRADING_MODE: ${IBKR_TRADING_MODE:-paper}
+      TWS_ACCEPT_INCOMING: accept
+      READ_ONLY_API: "no"
+      VNC_SERVER_PASSWORD: ${GRAFANA_PASSWORD} # reużyj hasła do VNC
+    ports:
+      - "4002:4002" # paper trading API
+      - "4001:4001" # live trading API (nie otwieraj póki nie testujesz)
+      - "5900:5900" # VNC – podgląd GUI TWS
+    volumes:
+      - tws_settings:/home/ibgateway/Jts
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 4002 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s # TWS Gateway potrzebuje ~2 min na start
+
+  # ── 5. Agent techniczny ───────────────────────
+  agent-techniczny:
+    <<: *agent-base
+    build:
+      context: ./technical-analysis-agent
+    container_name: trade-agent-tech
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+      AGENT_NAME: techniczny
+    volumes:
+      - agent_data:/app/data
+    depends_on:
+      ollama:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  # ── 6. Agent fundamentalny ────────────────────
+  agent-fundamentalny:
+    <<: *agent-base
+    build:
+      context: ./fundamental-analysis-agent
+    container_name: trade-agent-fund
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+      ALPHA_VANTAGE_KEY: ${ALPHA_VANTAGE_KEY}
+      AGENT_NAME: fundamentalny
+
+  # ── 7. Agent sentymentu ───────────────────────
+  agent-sentyment:
+    <<: *agent-base
+    build:
+      context: ./sentiment-analysis-agent
+    container_name: trade-agent-sent
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+      REDDIT_CLIENT_ID: ${REDDIT_CLIENT_ID}
+      REDDIT_CLIENT_SECRET: ${REDDIT_CLIENT_SECRET}
+      REDDIT_USER_AGENT: ${REDDIT_USER_AGENT}
+      NEWSAPI_KEY: ${NEWSAPI_KEY}
+      AGENT_NAME: sentyment
+
+  # ── 8. Agent ryzyka ───────────────────────────
+  agent-ryzyko:
+    <<: *agent-base
+    build:
+      context: ./risk-management-agent
+    container_name: trade-agent-risk
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+      MAX_POZYCJA_PROCENT: ${MAX_POZYCJA_PROCENT:-8}
+      MAX_DRAWDOWN_PROCENT: ${MAX_DRAWDOWN_PROCENT:-15}
+      KAPITAL_PORTFELA: ${KAPITAL_PORTFELA:-10000}
+      AGENT_NAME: ryzyko
+
+  # ── 9. Orkiestrator ───────────────────────────
+  orkiestrator:
+    <<: *agent-base
+    build:
+      context: ./orchestrator-agent
+    container_name: trade-orkiestrator
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      HUMAN_APPROVAL: ${HUMAN_APPROVAL:-true}
+      CYKL_GODZINY: ${CYKL_GODZINY:-4}
+      TICKERY: ${TICKERY:-AAPL,NVDA,MSFT}
+      KAPITAL_PORTFELA: ${KAPITAL_PORTFELA:-10000}
+      DRY_RUN: ${DRY_RUN:-true}
+    depends_on:
+      agent-techniczny:
+        condition: service_started
+      agent-fundamentalny:
+        condition: service_started
+      agent-sentyment:
+        condition: service_started
+      agent-ryzyko:
+        condition: service_started
+      tws-gateway:
+        condition: service_healthy
+
+  # ── 10. Broker connection ─────────────────────
+  broker:
+    <<: *agent-base
+    profiles: [live, paper]
+    build:
+      context: ./broker-connection
+    container_name: trade-broker
+    environment:
+      IBKR_HOST: tws-gateway
+      IBKR_PORT: ${IBKR_PORT:-4002}
+      IBKR_CLIENT_ID: ${IBKR_CLIENT_ID:-1}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      POSTGRES_HOST: postgres
+    depends_on:
+      tws-gateway:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  # ── 11. Grafana – dashboard ───────────────────
+  grafana:
+    image: grafana/grafana:latest
+    container_name: trade-grafana
+    networks:
+      - trade-net
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+  # ── 12. pgAdmin – UI bazy danych ─────────────
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: trade-pgadmin
+    networks:
+      - trade-net
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
+    ports:
+      - "5050:80"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+# ════════════════════════════════════════════════
+networks:
+  trade-net:
+    driver: bridge
+    name: trade-network
+
+volumes:
+  ollama_data:
+  postgres_data:
+  redis_data:
+  tws_settings:
+  grafana_data:
+  agent_data:
