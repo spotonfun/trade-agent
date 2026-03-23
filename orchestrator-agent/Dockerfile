@@ -7,10 +7,17 @@ RUN apt-get update && apt-get install -y \
     gcc g++ libffi-dev curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+COPY orchestrator-agent/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+COPY orchestrator-agent/ .
+COPY shared/ /shared/
+
+COPY technical-analysis-agent/agent_techniczny.py .
+COPY fundamental-analysis-agent/fundamental_agent.py agent_fundamentalny.py
+COPY sentiment-analysis-agent/sentiment_agent.py agent_sentymentu.py
+COPY risk-management-agent/risk_agent.py .
+
 
 # Healthcheck – sprawdza czy Ollama odpowiada
 HEALTHCHECK --interval=60s --timeout=10s --retries=3 \

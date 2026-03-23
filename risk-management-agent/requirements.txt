@@ -1,6 +1,8 @@
 yfinance
-pandas-ta
+numpy
 ollama
-psycopg2-binary
-python-dotenv
 schedule
+psycopg2-binary
+redis
+python-dotenv
+requests

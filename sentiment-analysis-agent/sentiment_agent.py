@@ -447,20 +447,20 @@ if __name__ == "__main__":
             print(f"  Catalyst: {', '.join(w.get('catalyst_events', []))}")
         except Exception as e:
             print(f"Błąd {ticker}: {e}")
-```
+# ```
 
----
+# ---
 
-## Konfiguracja Reddit API (5 minut)
+# ## Konfiguracja Reddit API (5 minut)
 
-Reddit wymaga własnych credentials, ale są całkowicie darmowe:
+# Reddit wymaga własnych credentials, ale są całkowicie darmowe:
 
-1. Zaloguj się na reddit.com i wejdź na `reddit.com/prefs/apps`
-2. Kliknij "create another app" → wybierz "script"
-3. Nazwa: `investment-agent`, redirect URI: `http://localhost:8080`
-4. Skopiuj `client_id` (pod nazwą) i `client_secret`
+# 1. Zaloguj się na reddit.com i wejdź na `reddit.com/prefs/apps`
+# 2. Kliknij "create another app" → wybierz "script"
+# 3. Nazwa: `investment-agent`, redirect URI: `http://localhost:8080`
+# 4. Skopiuj `client_id` (pod nazwą) i `client_secret`
 
-Ustaw w `.env`:
-```
-REDDIT_CLIENT_ID=twoj_id
-REDDIT_CLIENT_SECRET=twoj_secret
+# Ustaw w `.env`:
+# ```
+# REDDIT_CLIENT_ID=twoj_id
+# REDDIT_CLIENT_SECRET=twoj_secret

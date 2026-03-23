@@ -1,6 +1,8 @@
+ib_insync
 yfinance
-pandas-ta
 ollama
 psycopg2-binary
+redis
 python-dotenv
-schedule
+aiohttp
+python-telegram-bot

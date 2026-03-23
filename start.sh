@@ -46,20 +46,36 @@ sprawdz_docker() {
 
 czekaj_na_serwis() {
     local nazwa="$1"
-    local sekundy="${2:-30}"
+    local sekundy="${2:-60}"
     info "Czekam na serwis: $nazwa (max ${sekundy}s)..."
     local i=0
     while [ $i -lt $sekundy ]; do
-        if docker compose ps "$nazwa" 2>/dev/null | grep -q "healthy"; then
+        STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$nazwa" 2>/dev/null)
+
+        if [ "$STATUS" = "healthy" ]; then
             ok "$nazwa gotowy"
             return 0
         fi
+
+        if [ "$STATUS" = "unhealthy" ]; then
+            warn "$nazwa unhealthy – sprawdzam logi..."
+            docker logs --tail=5 "$nazwa"
+            # Nie przerywaj – może jeszcze dojdzie do siebie
+        fi
+
         sleep 5
         i=$((i + 5))
         echo -n "."
     done
     echo ""
-    warn "$nazwa nie odpowiada po ${sekundy}s – sprawdź: docker compose logs $nazwa"
+    # Sprawdź jeszcze raz – może właśnie przeszedł na healthy
+    STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$nazwa" 2>/dev/null)
+    if [ "$STATUS" = "healthy" ]; then
+        ok "$nazwa gotowy (z opóźnieniem)"
+        return 0
+    fi
+    warn "$nazwa nie odpowiada po ${sekundy}s – kontynuuję mimo to"
+    return 0   # ← return 0 zamiast błędu, żeby nie blokować startu
 }
 
 pobierz_model_ollama() {
@@ -80,9 +96,9 @@ pobierz_model_ollama() {
 start_infrastruktura() {
     info "Uruchamiam infrastrukturę (postgres, redis, ollama)..."
     docker compose up -d postgres redis ollama
-    czekaj_na_serwis postgres 60
-    czekaj_na_serwis redis    30
-    czekaj_na_serwis ollama   90
+    czekaj_na_serwis trade-postgres 60
+    czekaj_na_serwis trade-redis    30
+    czekaj_na_serwis trade-ollama   180
     pobierz_model_ollama
 }
 

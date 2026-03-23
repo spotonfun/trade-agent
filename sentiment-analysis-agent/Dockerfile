@@ -7,10 +7,10 @@ RUN apt-get update && apt-get install -y \
     gcc g++ libffi-dev curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+COPY sentiment-analysis-agent/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+COPY sentiment-analysis-agent/ .
 
 # Healthcheck – sprawdza czy Ollama odpowiada
 HEALTHCHECK --interval=60s --timeout=10s --retries=3 \

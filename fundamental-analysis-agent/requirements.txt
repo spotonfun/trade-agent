@@ -1,5 +1,8 @@
 yfinance
-requests
-beautifulsoup4
 ollama
+schedule
+psycopg2-binary
+redis
+python-dotenv
+requests
 ratelimit
