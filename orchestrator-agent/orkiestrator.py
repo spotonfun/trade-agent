@@ -5,7 +5,6 @@
 import asyncio
 import json
 import os
-import sqlite3
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, asdict
@@ -13,6 +12,8 @@ from datetime import datetime
 from typing import Literal
 
 import ollama
+import psycopg2
+from psycopg2.extras import RealDictCursor
 import yfinance as yf
 
 # Dodaj ścieżkę do shared/ (wspólny moduł dry_run)
@@ -364,75 +365,49 @@ def deliberuj(
 
 
 # ───────────────────────────────────────────────
-# 6. Baza danych
+# 6. Baza danych PostgreSQL
 # ───────────────────────────────────────────────
 
-DB_SCIEZKA = os.getenv("DB_SCIEZKA", "/app/data/decyzje.db")
+# Konfiguracja połączenia PostgreSQL
+POSTGRES_HOST = os.getenv("POSTGRES_HOST", "postgres")
+POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
+POSTGRES_DB = os.getenv("POSTGRES_DB", "tradeagent")
+POSTGRES_USER = os.getenv("POSTGRES_USER", "tradeagent")
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "tradeagent")
 
 
-def init_db() -> sqlite3.Connection:
-    os.makedirs(os.path.dirname(DB_SCIEZKA), exist_ok=True)
-    con = sqlite3.connect(DB_SCIEZKA)
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS decyzje (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker          TEXT,
-            timestamp       TEXT,
-            action          TEXT,
-            confidence      REAL,
-            consensus       TEXT,
-            pozycja_procent REAL,
-            stop_loss       REAL,
-            take_profit     REAL,
-            cena_wejscia    REAL,
-            reasoning       TEXT,
-            devil_advocate  TEXT,
-            tryb            TEXT,
-            dane_json       TEXT
-        )
-    """)
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS zlecenia (
-            id               INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp        TEXT,
-            ticker           TEXT,
-            akcja            TEXT,
-            ilosc            INTEGER,
-            typ              TEXT,
-            status           TEXT,
-            wypelniona_cena  REAL,
-            wartosc_usd      REAL,
-            blad             TEXT,
-            decyzja_id       INTEGER
-        )
-    """)
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS wyniki (
-            id                   INTEGER PRIMARY KEY AUTOINCREMENT,
-            decyzja_id           INTEGER REFERENCES decyzje(id),
-            cena_wyjscia         REAL,
-            zwrot_procent        REAL,
-            czy_trafiona         INTEGER,
-            timestamp_zamkniecia TEXT
-        )
-    """)
-    con.commit()
+def get_db_connection():
+    """Tworzy połączenie z PostgreSQL."""
+    return psycopg2.connect(
+        host=POSTGRES_HOST,
+        port=POSTGRES_PORT,
+        dbname=POSTGRES_DB,
+        user=POSTGRES_USER,
+        password=POSTGRES_PASSWORD,
+    )
+
+
+def init_db():
+    """Inicjalizuje połączenie z PostgreSQL (tabele są tworzone przez init-db.sql)."""
+    con = get_db_connection()
     return con
 
 
 def zapisz_decyzje(
-    con: sqlite3.Connection,
+    con,
     decyzja: DecyzjaKoncowa,
     cena: float | None,
 ) -> int:
-    """Zapisuje decyzję do bazy. Zwraca id wiersza."""
+    """Zapisuje decyzję do bazy PostgreSQL. Zwraca id wiersza."""
     tryb = "DRY_RUN" if DRY_RUN else os.getenv("IBKR_TRADING_MODE", "paper").upper()
-    cur = con.execute("""
+    cur = con.cursor()
+    cur.execute("""
         INSERT INTO decyzje
         (ticker, timestamp, action, confidence, consensus,
          pozycja_procent, stop_loss, take_profit, cena_wejscia,
-         reasoning, devil_advocate, tryb, dane_json)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+         reasoning, devil_advocate, dane_json)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id
     """, (
         decyzja.ticker,
         decyzja.timestamp,
@@ -445,27 +420,29 @@ def zapisz_decyzje(
         cena,
         decyzja.reasoning,
         decyzja.devil_advocate,
-        tryb,
         json.dumps(asdict(decyzja), ensure_ascii=False),
     ))
+    decyzja_id = cur.fetchone()[0]
     con.commit()
-    return cur.lastrowid
+    cur.close()
+    return decyzja_id
 
 
 def zapisz_zlecenie_dry_run(
-    con: sqlite3.Connection,
+    con,
     ticker: str,
     akcja: str,
     ilosc: int,
     cena: float,
     decyzja_id: int,
 ):
-    """Zapisuje symulowane zlecenie (DRY_RUN) do bazy."""
-    con.execute("""
+    """Zapisuje symulowane zlecenie (DRY_RUN) do bazy PostgreSQL."""
+    cur = con.cursor()
+    cur.execute("""
         INSERT INTO zlecenia
         (timestamp, ticker, akcja, ilosc, typ, status,
          wypelniona_cena, wartosc_usd, blad, decyzja_id)
-        VALUES (?,?,?,?,?,?,?,?,?,?)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """, (
         datetime.now().isoformat(),
         ticker, akcja, ilosc,
@@ -474,6 +451,7 @@ def zapisz_zlecenie_dry_run(
         "", decyzja_id,
     ))
     con.commit()
+    cur.close()
 
 
 # ───────────────────────────────────────────────
@@ -483,7 +461,7 @@ def zapisz_zlecenie_dry_run(
 async def wykonaj_decyzje_orkiestratora(
     decyzja: DecyzjaKoncowa,
     kapital_portfela: float,
-    con: sqlite3.Connection,
+    con,
     decyzja_id: int,
 ) -> dict:
     """
@@ -675,19 +653,23 @@ def zamknij_pozycje(decyzja_id: int, cena_wyjscia: float):
     Uzupełnia tabelę wyniki o rzeczywisty zwrot.
     """
     con = init_db()
-    row = con.execute(
-        "SELECT cena_wejscia, action FROM decyzje WHERE id=?",
+    cur = con.cursor()
+    cur.execute(
+        "SELECT cena_wejscia, action FROM decyzje WHERE id=%s",
         (decyzja_id,)
-    ).fetchone()
+    )
+    row = cur.fetchone()
 
     if not row:
         print(f"Brak decyzji o id={decyzja_id}")
+        cur.close()
         con.close()
         return
 
     cena_wejscia, action = row
     if not cena_wejscia:
         print("Brak ceny wejścia – nie można policzyć zwrotu")
+        cur.close()
         con.close()
         return
 
@@ -695,18 +677,19 @@ def zamknij_pozycje(decyzja_id: int, cena_wyjscia: float):
     if action == "SELL":
         zwrot = -zwrot
 
-    con.execute("""
+    cur.execute("""
         INSERT INTO wyniki
         (decyzja_id, cena_wyjscia, zwrot_procent, czy_trafiona, timestamp_zamkniecia)
-        VALUES (?,?,?,?,?)
+        VALUES (%s, %s, %s, %s, %s)
     """, (
         decyzja_id,
         cena_wyjscia,
         round(zwrot * 100, 4),
-        1 if zwrot > 0 else 0,
+        True if zwrot > 0 else False,
         datetime.now().isoformat(),
     ))
     con.commit()
+    cur.close()
     con.close()
 
     print(
